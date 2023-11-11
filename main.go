@@ -1,9 +1,9 @@
 package main
 
 import (
-	"context"
 	b64 "encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -15,8 +15,32 @@ import (
 	"time"
 
 	"github.com/joho/godotenv"
-	"github.com/mattn/go-mastodon"
 )
+
+func postToMisskey(message string) error {
+	// MisskeyのエンドポイントURLを設定する
+	misskeyURL := os.Getenv("MISSKEY_ENDPOINT_URL") + "/api/notes/create"
+
+	// Misskeyへのリクエストを準備
+	postData := url.Values{}
+	postData.Set("i", os.Getenv("MISSKEY_ACCESS_TOKEN"))
+	postData.Set("text", message)
+
+	// HTTP POSTリクエストを作成
+	resp, err := http.PostForm(misskeyURL, postData)
+	if err != nil {
+		return fmt.Errorf("Failed to post to Misskey: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		log.Printf("Failed to post to Misskey. Status: %d. Response: %s", resp.StatusCode, string(body))
+		return errors.New("Failed to post to Misskey")
+	}
+
+	return nil
+}
 
 func main() {
 
@@ -35,9 +59,8 @@ func main() {
 	}()
 
 	godotenv.Load(".env")
-
-	if os.Getenv("MASTODON_INSTANCE_URL") == "" || os.Getenv("MASTODON_CLIENT_ID") == "" || os.Getenv("MASTODON_CLIENT_SECRET") == "" || os.Getenv("MASTODON_ACCOUNT_EMAIL") == "" || os.Getenv("MASTODON_ACCOUNT_PASSWORD") == "" || os.Getenv("SPOTIFY_CLIENT_ID") == "" || os.Getenv("SPOTIFY_CLIENT_SECRET") == "" {
-		log.Fatal("Failed to load credentials.")
+	if os.Getenv("MISSKEY_ENDPOINT_URL") == "" || os.Getenv("MISSKEY_ACCESS_TOKEN") == "" || os.Getenv("SPOTIFY_CLIENT_ID") == "" || os.Getenv("SPOTIFY_CLIENT_SECRET") == "" {
+		log.Fatal("Failed to load Misskey or Spotify credentials.")
 	} else if os.Getenv("SPOTIFY_REFRESH_TOKEN") == "" {
 		fmt.Println("`SPOTIFY_REFRESH_TOKEN` is not set. Please click the URL below.")
 		values := url.Values{}
@@ -45,16 +68,6 @@ func main() {
 		values.Add("response_type", "code")
 		values.Add("redirect_uri", "http://localhost:3000/callback")
 		fmt.Println("https://accounts.spotify.com/authorize?" + values.Encode())
-	}
-
-	mastodon_client := mastodon.NewClient(&mastodon.Config{
-		Server:       os.Getenv("MASTODON_INSTANCE_URL"),
-		ClientID:     os.Getenv("MASTODON_CLIENT_ID"),
-		ClientSecret: os.Getenv("MASTODON_CLIENT_SECRET"),
-	})
-	err := mastodon_client.Authenticate(context.Background(), os.Getenv("MASTODON_ACCOUNT_EMAIL"), os.Getenv("MASTODON_ACCOUNT_PASSWORD"))
-	if err != nil {
-		log.Fatal(err)
 	}
 
 	last_title := ""
@@ -70,11 +83,12 @@ func main() {
 					if progress > 5000 {
 						message := fmt.Sprintf("🎵 #NowPlaying #np: %s / %s (%s)\n%s", title, artist, album, url)
 						fmt.Println(message)
-						toot := mastodon.Toot{
-							Status:     message,
-							Visibility: "unlisted",
+
+						// Misskeyへの投稿に変更
+						err := postToMisskey(message)
+						if err != nil {
+							log.Fatal(err)
 						}
-						mastodon_client.PostStatus(context.Background(), &toot)
 
 						last_title = title
 					}
@@ -82,11 +96,9 @@ func main() {
 			} else {
 				title, artist, album = "", "", ""
 			}
-
 		}
 	}
 }
-
 func spotify_login(w http.ResponseWriter, req *http.Request) {
 	values := url.Values{}
 	values.Add("client_id", os.Getenv("SPOTIFY_CLIENT_ID"))
@@ -104,7 +116,7 @@ func spotify_callback(auth_code chan string) func(http.ResponseWriter, *http.Req
 		w.WriteHeader(200)
 		w.Header().Set("Content-Type", "text/html; charset=utf8")
 
-		w.Write([]byte("処理が完了しました。この画面を閉じることができます。\nnp2mast を再起動してください。"))
+		w.Write([]byte("処理が完了しました。この画面を閉じることができます。\nnp2misk を再起動してください。"))
 
 	}
 }
@@ -142,7 +154,7 @@ func save_refresh_token(auth_code string) {
 	}
 
 	refresh_token := jsonObj.(map[string]interface{})["refresh_token"].(string)
-	refresh_token_env, err := godotenv.Unmarshal(fmt.Sprintf("MASTODON_INSTANCE_URL=%s\nMASTODON_CLIENT_ID=%s\nMASTODON_CLIENT_SECRET=%s\nMASTODON_ACCOUNT_EMAIL=%s\nMASTODON_ACCOUNT_PASSWORD=%s\nSPOTIFY_CLIENT_ID=%s\nSPOTIFY_CLIENT_SECRET=%s\nSPOTIFY_REFRESH_TOKEN=%s\n", os.Getenv("MASTODON_INSTANCE_URL"), os.Getenv("MASTODON_CLIENT_ID"), os.Getenv("MASTODON_CLIENT_SECRET"), os.Getenv("MASTODON_ACCOUNT_EMAIL"), os.Getenv("MASTODON_ACCOUNT_PASSWORD"), os.Getenv("SPOTIFY_CLIENT_ID"), os.Getenv("SPOTIFY_CLIENT_SECRET"), refresh_token))
+	refresh_token_env, err := godotenv.Unmarshal(fmt.Sprintf("MISSKEY_ENDPOINT_URL=%s\nMISSKEY_ACCESS_TOKEN=%s\nSPOTIFY_CLIENT_ID=%s\nSPOTIFY_CLIENT_SECRET=%s\nSPOTIFY_REFRESH_TOKEN=%s\n", os.Getenv("MISSKEY_ENDPOINT_URL"), os.Getenv("MISSKEY_ACCESS_TOKEN"), os.Getenv("SPOTIFY_CLIENT_ID"), os.Getenv("SPOTIFY_CLIENT_SECRET"), refresh_token))
 
 	if err != nil {
 		log.Fatal(err)
@@ -216,6 +228,10 @@ func get_spotify_np() (is_playing bool, title string, artist string, album strin
 	defer resp.Body.Close()
 
 	body, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode == http.StatusUnauthorized {
+		fmt.Println("Error: Unauthorized. Access Token might have expired or is invalid.")
+	}
 
 	var jsonObj interface{}
 	if err := json.Unmarshal(body, &jsonObj); err != nil {
