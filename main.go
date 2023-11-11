@@ -18,15 +18,13 @@ import (
 )
 
 func postToMisskey(message string) error {
-	// MisskeyのエンドポイントURLを設定する
+
 	misskeyURL := os.Getenv("MISSKEY_ENDPOINT_URL") + "/api/notes/create"
 
-	// Misskeyへのリクエストを準備
 	postData := url.Values{}
 	postData.Set("i", os.Getenv("MISSKEY_ACCESS_TOKEN"))
 	postData.Set("text", message)
 
-	// HTTP POSTリクエストを作成
 	resp, err := http.PostForm(misskeyURL, postData)
 	if err != nil {
 		return fmt.Errorf("Failed to post to Misskey: %v", err)
@@ -84,7 +82,6 @@ func main() {
 						message := fmt.Sprintf("🎵 #NowPlaying #np: %s / %s (%s)\n%s", title, artist, album, url)
 						fmt.Println(message)
 
-						// Misskeyへの投稿に変更
 						err := postToMisskey(message)
 						if err != nil {
 							log.Fatal(err)
