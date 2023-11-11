@@ -227,7 +227,7 @@ func get_spotify_np() (is_playing bool, title string, artist string, album strin
 	body, _ := io.ReadAll(resp.Body)
 
 	if resp.StatusCode == http.StatusUnauthorized {
-		fmt.Println("Error: Unauthorized. Access Token might have expired or is invalid.")
+		fmt.Println("Error: オーソライズに失敗しています。`SPOTIFY_REFRESH_TOKEN` を確認してください。")
 	}
 
 	var jsonObj interface{}
