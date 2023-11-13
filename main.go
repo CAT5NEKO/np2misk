@@ -101,7 +101,7 @@ func spotify_login(w http.ResponseWriter, req *http.Request) {
 	values.Add("client_id", os.Getenv("SPOTIFY_CLIENT_ID"))
 	values.Add("response_type", "code")
 	values.Add("redirect_uri", "http://localhost:3000/callback")
-	values.Add("scope", "user-read-private user-top-read user-read-recently-played user-read-currently-playing playlist-modify-public playlist-modify-private playlist-read-collaborative user-read-play-history user-read-playback-state user-modify-playback-state")
+	values.Add("scope", "user-read-playback-state user-read-currently-playing")
 
 	http.Redirect(w, req, "https://accounts.spotify.com/authorize?"+values.Encode(), http.StatusFound)
 }
