@@ -9,7 +9,7 @@ YudeさんのMastodon用のナウプレをMisskeyで使えるようにしてい�
 * `SPOTIFY_REFRESH_TOKEN` について、np2mast をリモートサーバー等で稼働させる場合の注意点:\
   このソフトウェアでは、ローカル環境において `refresh_token` を取得するよう想定されています。\
   Spotify Web API アプリケーションのコールバック先を `http://localhost:3000` に設定し、一旦ローカル環境で np2mast のバイナリを動かして `refresh_token` を取得し、その値を `.env` に設定してください。\
-  このとき、ローカル環境の np2mast においては、`SPOTIFY_REFRESH_TOKEN` 以外の値が設定された `.env` が必要です。
+  このとき、ローカル環境の np2misk においては、`SPOTIFY_REFRESH_TOKEN` 以外の値が設定された `.env` が必要です。
 
 ## License
 MIT
