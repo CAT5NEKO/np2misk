@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	b64 "encoding/base64"
 	"encoding/json"
 	"errors"
@@ -18,14 +19,20 @@ import (
 )
 
 func postToMisskey(message string) error {
-
 	misskeyURL := os.Getenv("MISSKEY_ENDPOINT_URL") + "/api/notes/create"
 
-	postData := url.Values{}
-	postData.Set("i", os.Getenv("MISSKEY_ACCESS_TOKEN"))
-	postData.Set("text", message)
+	requestData := map[string]string{
+		"i":          os.Getenv("MISSKEY_ACCESS_TOKEN"),
+		"text":       message,
+		"visibility": "home",
+	}
 
-	resp, err := http.PostForm(misskeyURL, postData)
+	jsonData, err := json.Marshal(requestData)
+	if err != nil {
+		return fmt.Errorf("リクエストデータのJSONエンコードに失敗しました。: %v", err)
+	}
+
+	resp, err := http.Post(misskeyURL, "application/json", bytes.NewBuffer(jsonData))
 	if err != nil {
 		return fmt.Errorf("ノートに失敗しました。: %v", err)
 	}
@@ -65,6 +72,7 @@ func main() {
 		values.Add("client_id", os.Getenv("SPOTIFY_CLIENT_ID"))
 		values.Add("response_type", "code")
 		values.Add("redirect_uri", "http://localhost:3000/callback")
+		values.Add("scope", "user-read-playback-state user-read-currently-playing")
 		fmt.Println("https://accounts.spotify.com/authorize?" + values.Encode())
 	}
 
@@ -222,6 +230,7 @@ func get_spotify_np() (is_playing bool, title string, artist string, album strin
 	if err != nil {
 		log.Fatalf("HTTPリクエストの作成に失敗しました。: %s", err)
 	}
+
 	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", get_spotify_access_token()))
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
