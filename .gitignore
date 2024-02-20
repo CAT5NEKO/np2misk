@@ -1,2 +1,4 @@
 .env
-np2mast
+.idea
+/.idea/
+/.env/
