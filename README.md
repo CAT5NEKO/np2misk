@@ -1,5 +1,8 @@
 # np2misk
 
+![image](https://github.com/user-attachments/assets/5934c04e-ec3e-4971-85c3-5ab9646d9609)
+
+
 [日本語ドキュメント](./.docs/JPN.md)
 
 A bot for posting Spotify's Now Playing status to Misskey.
