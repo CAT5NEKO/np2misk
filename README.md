@@ -1,69 +1,62 @@
 # np2misk
 
-Spotify の Now Playing を Misskey に投稿するボット。
+[日本語ドキュメント](./.docs/JPN.md)
 
-YudeさんのMastodon用のナウプレをMisskeyで使えるようにしています。
+A bot for posting Spotify's Now Playing status to Misskey.
+
+This project adapts Yude's Mastodon Now Playing bot for use with Misskey.
 
 ## Setup
 
-`.env.sample` を参考にして、必要な値を `.env` に設定してください。
+Please refer to `.env.sample` and set the required values in `.env`.
 
-※`SPOTIFY_REFRESH_TOKEN` について、np2mast をリモートサーバー等で稼働させる場合の注意点:\
+**Note on `SPOTIFY_REFRESH_TOKEN`:** When running np2misk on a remote server, please be aware:\
 
-このソフトウェアでは、ローカル環境において `refresh_token` を取得するよう想定されています。
+This software is designed to obtain the `refresh_token` in a local environment.
 
-Spotify Web API アプリケーションのコールバック先を `http://localhost:3000` に設定し、一旦ローカル環境で
-np2mast のバイナリを動かして `refresh_token` を取得し、その値を `.env` に設定してください。
+Set the callback URL of your Spotify Web API application to `http://localhost:3000`, run the np2misk binary locally to obtain the `refresh_token`, and set this value in `.env`.
 
-この際に、ローカル環境の np2misk においては、`SPOTIFY_REFRESH_TOKEN` 以外の値が設定された `.env`
-が必要です。
+For local np2misk, you will need an `.env` file with values other than `SPOTIFY_REFRESH_TOKEN` configured.
 
 ## Usage
 
-まず、`go build` でバイナリをビルドしてください。
+First, build the binary using `go build`.
 
-JSON形式でポストする都合上、曲がうまく読み取れなかった場合に処理が終了してしまう場合があるので、恒久的に動作させたい場合は以下のスクリプトとsystemdの設定を組み合わせてください。
+Due to the JSON format of posts, the process may terminate if the song is not read correctly. To ensure continuous operation, combine the following script with a systemd configuration.
 
 ```shell
 #!/bin/bash
 
 cd /path/to/your/np2misk/
- 
+
 if [ -x ./np2misk ]; then
     ./np2misk
-  else
+else
     echo "Error: ./np2misk not found or not executable."
 fi
 
 while true; do
     ./np2misk
     if [ $? -eq 0 ]; then
-      echo "Execution completed successfully. Exiting."
-      exit 0
-        else
-          echo "Error occurred. Retrying..."
-            sleep 1
+        echo "Execution completed successfully. Exiting."
+        exit 0
+    else
+        echo "Error occurred. Retrying..."
+        sleep 1
     fi
 done
 ```
 
 ```dotenv
 [Unit]
-  Description=Run run_main script repeatedly
+Description=Run run_main script repeatedly
 
 [Service]
-  Type=simple
-  ExecStart=/bin/bash /path/to/your/np2misk/run_main.sh
+Type=simple
+ExecStart=/bin/bash /path/to/your/np2misk/run_main.sh
 
 [Install]
-  WantedBy=default.target
+WantedBy=default.target
 ```
 
-今回のサンプルではスクリプトが同一ディレクトリに存在している想定ですが、スクリプトファイルは任意の場所に置いてください。
-
-## License
-
-MIT
-Copyright (c) 2022 yude
-
-Copy left 2023 CAT5NEKO (Misskeyに差し替えた部分のみ)
+In this example, it is assumed that the script is located in the same directory, but you can place the script file in any location.
