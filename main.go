@@ -1,282 +1,130 @@
 package main
 
 import (
-	"bytes"
-	b64 "encoding/base64"
-	"encoding/json"
-	"errors"
+	"context"
 	"fmt"
-	"io"
 	"log"
-	"net/http"
 	"net/url"
 	"os"
-	"reflect"
-	"strings"
+	"os/signal"
+	"syscall"
 	"time"
 
-	"github.com/joho/godotenv"
+	"np2misk/internal/application"
+	"np2misk/internal/infrastructure/history"
+	"np2misk/internal/infrastructure/misskey"
+	"np2misk/internal/infrastructure/resilience"
+	"np2misk/internal/infrastructure/spotify"
+	"np2misk/internal/interfaces/config"
 )
 
-func postToMisskey(message string) error {
-	misskeyURL := os.Getenv("MISSKEY_ENDPOINT_URL") + "/api/notes/create"
-
-	requestData := map[string]string{
-		"i":          os.Getenv("MISSKEY_ACCESS_TOKEN"),
-		"text":       message,
-		"visibility": "home",
-	}
-
-	jsonData, err := json.Marshal(requestData)
-	if err != nil {
-		return fmt.Errorf("リクエストデータのJSONエンコードに失敗しました。: %v", err)
-	}
-
-	resp, err := http.Post(misskeyURL, "application/json", bytes.NewBuffer(jsonData))
-	if err != nil {
-		return fmt.Errorf("ノートに失敗しました。: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		log.Printf("Failed to post to Misskey. Status: %d. Response: %s", resp.StatusCode, string(body))
-		return errors.New("ノートに失敗しました")
-	}
-
-	return nil
-}
-
 func main() {
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		log.Fatal("Failed to load configuration:", err)
+	}
+
+	if !cfg.HasRefreshToken() {
+		printAuthURL(cfg.SpotifyClientID)
+		startAuthServer(cfg)
+		return
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	spotifyRepo := spotify.NewSpotifyRepository(spotify.Config{
+		ClientID:     cfg.SpotifyClientID,
+		ClientSecret: cfg.SpotifyClientSecret,
+		RefreshToken: cfg.SpotifyRefreshToken,
+	})
+
+	noteRepo := misskey.NewNoteRepository(misskey.Config{
+		Host:           cfg.MisskeyEndpointURL,
+		AuthToken:      cfg.MisskeyAccessToken,
+		MaxPermits:     cfg.MaxPermits,
+		RefillInterval: cfg.GetRefillInterval(),
+	})
+
+	circuitBreaker := resilience.NewCircuitBreaker(resilience.CircuitBreakerConfig{
+		MaxFailures:  cfg.CircuitBreakerMaxFailures,
+		ResetTimeout: cfg.GetCircuitBreakerResetTimeout(),
+	})
+
+	retryer := resilience.NewRetryer(resilience.RetryerConfig{
+		MaxRetries: cfg.MaxRetries,
+		Delay:      cfg.GetRetryDelay(),
+	})
+
+	trackHistory := history.NewTrackHistory(history.TrackHistoryConfig{
+		CooldownPeriod: cfg.GetCooldownPeriod(),
+	})
+
+	service := application.NewNowPlayingService(application.NowPlayingServiceConfig{
+		MusicPlayer:    spotifyRepo,
+		Poster:         noteRepo,
+		History:        trackHistory,
+		CircuitBreaker: circuitBreaker,
+		Retryer:        retryer,
+		MinProgressMs:  cfg.MinProgressMs,
+	})
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
 
 	go func() {
-		http.HandleFunc("/login", spotify_login)
-		auth_code := make(chan string)
-		go pass_callback(auth_code)
-		handleCallback := spotify_callback(auth_code)
-		http.HandleFunc("/callback", handleCallback)
-
-		err := http.ListenAndServe("0.0.0.0:3000", nil)
-
-		if err != nil {
-			log.Fatal(err)
-		}
+		<-sigCh
+		log.Println("Shutdown signal received")
+		cancel()
 	}()
 
-	godotenv.Load(".env")
-	if os.Getenv("MISSKEY_ENDPOINT_URL") == "" || os.Getenv("MISSKEY_ACCESS_TOKEN") == "" || os.Getenv("SPOTIFY_CLIENT_ID") == "" || os.Getenv("SPOTIFY_CLIENT_SECRET") == "" {
-		log.Fatal("MisskeyかSpotifyで必要な資格要件が不足しています。envを修正してください。")
-	} else if os.Getenv("SPOTIFY_REFRESH_TOKEN") == "" {
-		fmt.Println("`SPOTIFY_REFRESH_TOKEN` がセットされていません。以下よりセットしてください。")
-		values := url.Values{}
-		values.Add("client_id", os.Getenv("SPOTIFY_CLIENT_ID"))
-		values.Add("response_type", "code")
-		values.Add("redirect_uri", "http://127.0.0.1:3000/callback")
-		values.Add("scope", "user-read-playback-state user-read-currently-playing")
-		fmt.Println("https://accounts.spotify.com/authorize?" + values.Encode())
+	log.Printf("np2misk started (polling interval: %v)", cfg.GetPollingInterval())
+
+	ticker := time.NewTicker(cfg.GetPollingInterval())
+	defer ticker.Stop()
+
+	if err := service.CheckAndPost(ctx); err != nil {
+		log.Printf("Error: %v", err)
 	}
-
-	last_title := ""
-
-	ticker := time.NewTicker(20 * time.Second)
 
 	for {
 		select {
+		case <-ctx.Done():
+			log.Println("Shutting down...")
+			return
 		case <-ticker.C:
-			is_playing, title, artist, album, url, progress := get_spotify_np()
-			if is_playing {
-				if last_title == "" || title != last_title {
-					if progress > 5000 {
-						message := fmt.Sprintf("🎵 #なうぷれ : %s / %s (%s)\n%s", title, artist, album, url)
-						fmt.Println(message)
-
-						err := postToMisskey(message)
-						if err != nil {
-							log.Fatal(err)
-						}
-
-						last_title = title
-					}
-				}
-			} else {
-				title, artist, album = "", "", ""
+			if err := service.CheckAndPost(ctx); err != nil {
+				log.Printf("Error: %v", err)
 			}
 		}
 	}
 }
-func spotify_login(w http.ResponseWriter, req *http.Request) {
+
+func printAuthURL(clientID string) {
 	values := url.Values{}
-	values.Add("client_id", os.Getenv("SPOTIFY_CLIENT_ID"))
+	values.Add("client_id", clientID)
 	values.Add("response_type", "code")
 	values.Add("redirect_uri", "http://127.0.0.1:3000/callback")
 	values.Add("scope", "user-read-playback-state user-read-currently-playing")
-
-	http.Redirect(w, req, "https://accounts.spotify.com/authorize?"+values.Encode(), http.StatusFound)
+	fmt.Println("`SPOTIFY_REFRESH_TOKEN` がセットされていません。以下よりセットしてください。")
+	fmt.Println("https://accounts.spotify.com/authorize?" + values.Encode())
 }
 
-func spotify_callback(auth_code chan string) func(http.ResponseWriter, *http.Request) {
-	return func(w http.ResponseWriter, req *http.Request) {
-		query := req.URL.Query().Get("code")
-		auth_code <- query
-
-		w.WriteHeader(200)
-		w.Header().Set("Content-Type", "text/html; charset=utf8")
-
-		w.Write([]byte("処理が完了しました。この画面を閉じることができます。\nnp2misk を再起動してください。"))
-
-	}
-}
-
-func pass_callback(auth_code chan string) {
-	for item := range auth_code {
-		save_refresh_token(item)
-	}
-}
-
-func save_refresh_token(auth_code string) {
-	values := make(url.Values)
-	values.Set("grant_type", "authorization_code")
-	values.Set("code", auth_code)
-
-	values.Set("redirect_uri", "http://127.0.0.1:3000/callback")
-	req, err := http.NewRequest(http.MethodPost, "https://accounts.spotify.com/api/token", strings.NewReader(values.Encode()))
-	if err != nil {
-		log.Fatalf("POSTリクエストの送信に失敗しました。: %s", err)
-	}
-	req.Header.Set("Authorization", fmt.Sprintf("Basic %s", b64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("%s:%s", os.Getenv("SPOTIFY_CLIENT_ID"), os.Getenv("SPOTIFY_CLIENT_SECRET"))))))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		log.Fatalf("トークン変換リクエストに失敗しました。: %s", err)
-	}
-	defer resp.Body.Close()
-
-	body, _ := io.ReadAll(resp.Body)
-	if err != nil {
-		log.Fatalf("レスポンスボディの読み取りに失敗しました。: %s", err)
-	}
-
-	var jsonObj interface{}
-	if err := json.Unmarshal(body, &jsonObj); err != nil {
-		fmt.Println(string(body))
-		log.Fatalf("JSONボディにパースする所で問題が発生しました。: %s\nResponse body: %s", err, string(body))
-	}
-
-	refresh_token := jsonObj.(map[string]interface{})["refresh_token"].(string)
-	refresh_token_env, err := godotenv.Unmarshal(fmt.Sprintf("MISSKEY_ENDPOINT_URL=%s\nMISSKEY_ACCESS_TOKEN=%s\nSPOTIFY_CLIENT_ID=%s\nSPOTIFY_CLIENT_SECRET=%s\nSPOTIFY_REFRESH_TOKEN=%s\n", os.Getenv("MISSKEY_ENDPOINT_URL"), os.Getenv("MISSKEY_ACCESS_TOKEN"), os.Getenv("SPOTIFY_CLIENT_ID"), os.Getenv("SPOTIFY_CLIENT_SECRET"), refresh_token))
-
-	if err != nil {
+func startAuthServer(cfg *config.Config) {
+	authServer := spotify.NewAuthServer(spotify.AuthServerConfig{
+		ClientID:     cfg.SpotifyClientID,
+		ClientSecret: cfg.SpotifyClientSecret,
+		RedirectURI:  "http://127.0.0.1:3000/callback",
+		ListenAddr:   "0.0.0.0:3000",
+		EnvFilePath:  ".env",
+		ExistingEnv: map[string]string{
+			"MISSKEY_ENDPOINT_URL":  cfg.MisskeyEndpointURL,
+			"MISSKEY_ACCESS_TOKEN":  cfg.MisskeyAccessToken,
+			"SPOTIFY_CLIENT_ID":     cfg.SpotifyClientID,
+			"SPOTIFY_CLIENT_SECRET": cfg.SpotifyClientSecret,
+		},
+	})
+	if err := authServer.Start(); err != nil {
 		log.Fatal(err)
 	}
-	err = godotenv.Write(refresh_token_env, "./.env")
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	os.Exit(0)
-}
-
-func get_spotify_access_token() string {
-	values := make(url.Values)
-	values.Set("grant_type", "refresh_token")
-	values.Set("refresh_token", os.Getenv("SPOTIFY_REFRESH_TOKEN"))
-
-	req, err := http.NewRequest(http.MethodPost, "https://accounts.spotify.com/api/token", strings.NewReader(values.Encode()))
-	if err != nil {
-		log.Fatalf("POSTリクエストが送信できませんでした。: %s", err)
-	}
-
-	spotify_auth_string := b64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("%s:%s", os.Getenv("SPOTIFY_CLIENT_ID"), os.Getenv("SPOTIFY_CLIENT_SECRET"))))
-
-	req.Header.Set("Authorization", fmt.Sprintf("Basic %s", spotify_auth_string))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer resp.Body.Close()
-
-	body, _ := io.ReadAll(resp.Body)
-
-	var jsonObj interface{}
-	if err := json.Unmarshal(body, &jsonObj); err != nil {
-		fmt.Println(string(body))
-		log.Fatal(err)
-	}
-
-	if isNil(jsonObj.(map[string]interface{})["access_token"]) {
-		fmt.Println(body)
-		os.Exit(1)
-	}
-
-	return jsonObj.(map[string]interface{})["access_token"].(string)
-}
-
-func isNil(i interface{}) bool {
-	if i == nil {
-		return true
-	}
-	switch reflect.TypeOf(i).Kind() {
-	case reflect.Ptr, reflect.Map, reflect.Array, reflect.Chan, reflect.Slice:
-		return reflect.ValueOf(i).IsNil()
-	}
-	return false
-}
-
-func get_spotify_np() (is_playing bool, title string, artist string, album string, url string, progress float64) {
-	req, err := http.NewRequest(http.MethodGet, "https://api.spotify.com/v1/me/player/currently-playing", nil)
-	if err != nil {
-		log.Fatalf("HTTPリクエストの作成に失敗しました。: %s", err)
-	}
-
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", get_spotify_access_token()))
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		log.Fatalf("HTTPリクエストで問題が発生しました。: %s", err)
-	}
-	defer resp.Body.Close()
-
-	body, _ := io.ReadAll(resp.Body)
-
-	if resp.StatusCode == http.StatusUnauthorized {
-		fmt.Println("Error: オーソライズに失敗しています。`SPOTIFY_REFRESH_TOKEN` を確認してください。")
-	}
-
-	var jsonObj interface{}
-	if err := json.Unmarshal(body, &jsonObj); err != nil {
-		fmt.Println(string(body))
-		log.Fatalf("JSON unmarshal で問題が生じました。: %s\nResponse body: %s", err, string(body))
-	}
-
-	if isNil(jsonObj.(map[string]interface{})["is_playing"]) {
-		fmt.Println(string(body))
-		os.Exit(1)
-	}
-	is_playing = jsonObj.(map[string]interface{})["is_playing"].(bool)
-
-	if is_playing {
-		title = jsonObj.(map[string]interface{})["item"].(map[string]interface{})["name"].(string)
-
-		artists := jsonObj.(map[string]interface{})["item"].(map[string]interface{})["artists"]
-		for i := 0; i < len(artists.([]interface{})); i++ {
-			artist += artists.([]interface{})[i].(map[string]interface{})["name"].(string)
-			if i < len(artists.([]interface{}))-1 {
-				artist += ", "
-			}
-		}
-
-		album = jsonObj.(map[string]interface{})["item"].(map[string]interface{})["album"].(map[string]interface{})["name"].(string)
-
-		url = jsonObj.(map[string]interface{})["item"].(map[string]interface{})["external_urls"].(map[string]interface{})["spotify"].(string)
-
-		progress = jsonObj.(map[string]interface{})["progress_ms"].(float64)
-	} else {
-		is_playing = false
-
-		title, artist, album = "", "", ""
-	}
-
-	return is_playing, title, artist, album, url, progress
 }
