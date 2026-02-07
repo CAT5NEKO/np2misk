@@ -104,7 +104,7 @@ func printAuthURL(clientID string) {
 	values := url.Values{}
 	values.Add("client_id", clientID)
 	values.Add("response_type", "code")
-	values.Add("redirect_uri", "http://127.0.0.1:3000/callback")
+	values.Add("redirect_uri", "http://127.0.0.1:3496/callback")
 	values.Add("scope", "user-read-playback-state user-read-currently-playing")
 	fmt.Println("`SPOTIFY_REFRESH_TOKEN` がセットされていません。以下よりセットしてください。")
 	fmt.Println("https://accounts.spotify.com/authorize?" + values.Encode())
@@ -114,8 +114,8 @@ func startAuthServer(cfg *config.Config) {
 	authServer := spotify.NewAuthServer(spotify.AuthServerConfig{
 		ClientID:     cfg.SpotifyClientID,
 		ClientSecret: cfg.SpotifyClientSecret,
-		RedirectURI:  "http://127.0.0.1:3000/callback",
-		ListenAddr:   "0.0.0.0:3000",
+		RedirectURI:  "http://127.0.0.1:3496/callback",
+		ListenAddr:   "0.0.0.0:3496",
 		EnvFilePath:  ".env",
 		ExistingEnv: map[string]string{
 			"MISSKEY_ENDPOINT_URL":  cfg.MisskeyEndpointURL,
