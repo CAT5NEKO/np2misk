@@ -4,6 +4,7 @@
 
 SpotifyのNow Playing情報を取得してMisskeyに自動投稿するGoアプリケーション。
 クリーンアーキテクチャを採用し、domain/application/infrastructure/interfacesの4層構造で実装。
+原則Go 1.24をもしくはこれを閲覧した時期の最新のバージョンを使用。
 
 ## アーキテクチャ
 
@@ -11,10 +12,16 @@ SpotifyのNow Playing情報を取得してMisskeyに自動投稿するGoアプ�
 
 - `internal/domain/entity/`: ビジネスロジックを含むエンティティ（Track, Note）
 - `internal/domain/repository/`: リポジトリインターフェース定義
+  - `MusicPlayerRepository`: 音楽プレーヤー抽象化
+  - `PostRepository`: 投稿先抽象化
+  - `CircuitBreaker`, `Retryer`: 耐障害性パターン
+  - `TrackHistory`: 履歴管理
 - `internal/application/`: アプリケーションサービス層（NowPlayingService）
 - `internal/infrastructure/`: 外部サービスとの接続実装
-  - `spotify/`: Spotify API クライアント
-  - `misskey/`: Misskey API クライアント
+  - `spotify/`: Spotify API クライアント（MusicPlayerRepository実装）
+  - `misskey/`: Misskey API クライアント（PostRepository実装）
+  - `resilience/`: CircuitBreaker, Retryer実装
+  - `history/`: TrackHistory実装
 - `internal/interfaces/config/`: 設定管理
 
 ### 依存関係ルール
@@ -38,12 +45,17 @@ SpotifyのNow Playing情報を取得してMisskeyに自動投稿するGoアプ�
 
 ### 命名規則
 
-- パッケージ名：小文字のみ（`spotify`, `misskey`）
+- パッケージ名：小文字のみ（`spotify`, `misskey`, `resilience`）
 - エクスポートする識別子：PascalCase（`Track`, `NewNoteRepository`）
 - プライベート識別子：camelCase（`rateLimiter`, `lastTrackTitle`）
-- インターフェース名：名詞形（`SpotifyRepository`, `NoteRepository`）
+- インターフェース名：名詞形（`MusicPlayerRepository`, `PostRepository`, `CircuitBreaker`）
 - コンストラクタ：`New<TypeName>`の形式（`NewTrack`, `NewNowPlayingService`）
 - レシーバー名：1〜2文字の短縮形（`s *NowPlayingService`, `r *spotifyRepository`）
+
+### Go 1.24の活用
+
+- `range`を整数に対して使用（`for i := range n`）
+- 標準ライブラリの新機能を積極的に活用
 
 ### エラーハンドリング
 
